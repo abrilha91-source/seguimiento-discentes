@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#3b4425">
+<title>Seguimiento de práctica clínica · Esc. Mil. Enfría.</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 40 40%22%3E%3Cpath d=%22M20 3 35 9v10c0 9-6.5 15.5-15 18C11.5 34.5 5 28 5 19V9z%22 fill=%22%234b5320%22/%3E%3Cpath d=%22M17 12h6v6h6v6h-6v6h-6v-6h-6v-6h6z%22 fill=%22%23c9a227%22/%3E%3C/svg%3E">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="brand-logo" aria-hidden="true">
+        <svg viewBox="0 0 40 40"><path d="M20 3 35 9v10c0 9-6.5 15.5-15 18C11.5 34.5 5 28 5 19V9z" fill="currentColor" opacity=".18"/><path d="M20 3 35 9v10c0 9-6.5 15.5-15 18C11.5 34.5 5 28 5 19V9z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M17 12h6v6h6v6h-6v6h-6v-6h-6v-6h6z" fill="currentColor"/></svg>
+      </div>
+      <div><div class="brand-t">Práctica clínica</div><div class="brand-s">Seguimiento de cadetes</div></div>
+    </div>
+    <nav class="nav" id="nav">
+      <a href="#/tablero" data-r="tablero"><svg viewBox="0 0 24 24"><path d="M3 13h8V3H3zm0 8h8v-6H3zm10 0h8V11h-8zm0-18v6h8V3z"/></svg><span>Tablero</span></a>
+      <a href="#/listado" data-r="listado"><svg viewBox="0 0 24 24"><path d="M16 11c1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3 1.34 3 3 3m-8 0c1.66 0 3-1.34 3-3S9.66 5 8 5 5 6.34 5 8s1.34 3 3 3m0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5m8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5"/></svg><span>Cadetes</span></a>
+      <a href="#/captura" data-r="captura"><svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75z"/></svg><span>Calificaciones</span></a>
+      <a href="#/importar" data-r="importar"><svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7zM5 18v2h14v-2z"/></svg><span>Importar</span></a>
+      <a href="#/ajustes" data-r="ajustes"><svg viewBox="0 0 24 24"><path d="M19.14 12.94a7.07 7.07 0 0 0 0-1.88l2.03-1.58a.5.5 0 0 0 .12-.61l-1.92-3.32a.5.5 0 0 0-.59-.22l-2.39.96a7.03 7.03 0 0 0-1.62-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.49.42l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.5.5 0 0 0-.59.22L2.71 8.87a.5.5 0 0 0 .12.61l2.03 1.58a7.07 7.07 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.25.42.49.42h3.84c.25 0 .45-.18.49-.42l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.5.5 0 0 0-.12-.61zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2"/></svg><span>Ajustes y respaldo</span></a>
+    </nav>
+    <div class="side-foot">
+      <div class="privacy"><svg viewBox="0 0 24 24"><path d="M18 8h-1V6A5 5 0 0 0 7 6v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2m-6 9a2 2 0 1 1 0-4 2 2 0 0 1 0 4m3.1-9H8.9V6a3.1 3.1 0 0 1 6.2 0z"/></svg>Tus datos se guardan solo en este dispositivo.</div>
+      <div class="side-meta">Esc. Mil. Enfría. · Subsec. Práctica Clínica<br>Ciclo lectivo 2026-2027</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="tb-title"><h1 id="viewTitle">Tablero</h1><div class="tb-sub" id="viewSub"></div></div>
+      <div class="tb-actions">
+        <div class="qsearch"><svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16a6.47 6.47 0 0 0 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"/></svg><input id="qsearch" type="search" placeholder="Buscar cadete…" autocomplete="off"><div class="qres" id="qres"></div></div>
+        <button class="btn ghost hide-sm" data-act="export-seg" title="Exportar reporte de seguimiento">Reporte Excel</button>
+      </div>
+    </header>
+    <section id="view" class="view"></section>
+  </main>
+</div>
+
+<nav class="bottomnav" id="bottomnav">
+  <a href="#/tablero" data-r="tablero"><svg viewBox="0 0 24 24"><path d="M3 13h8V3H3zm0 8h8v-6H3zm10 0h8V11h-8zm0-18v6h8V3z"/></svg>Tablero</a>
+  <a href="#/listado" data-r="listado"><svg viewBox="0 0 24 24"><path d="M16 11c1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3 1.34 3 3 3m-8 0c1.66 0 3-1.34 3-3S9.66 5 8 5 5 6.34 5 8s1.34 3 3 3m0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5m8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5"/></svg>Cadetes</a>
+  <a href="#/captura" data-r="captura"><svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75z"/></svg>Calif.</a>
+  <a href="#/importar" data-r="importar"><svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7zM5 18v2h14v-2z"/></svg>Importar</a>
+  <a href="#/ajustes" data-r="ajustes"><svg viewBox="0 0 24 24"><path d="M12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2m7.14-2.66a7.07 7.07 0 0 0 0-1.88l2.03-1.58-1.92-3.32-2.39.96a7 7 0 0 0-1.62-.94L16.88 3h-3.84l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96-1.92 3.32 2.03 1.58a7.07 7.07 0 0 0 0 1.88l-2.03 1.58 1.92 3.32 2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54h3.84l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96 1.92-3.32z"/></svg>Ajustes</a>
+</nav>
+
+<div class="modal-bg" id="modalBg"><div class="modal" id="modal" role="dialog" aria-modal="true"></div></div>
+<div class="toasts" id="toasts"></div>
+
+<script src="xlsx.bundle.js"></script>
+<script>window.XLSX || document.write('<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"><\/script>')</script>
+<script src="app.js"></script>
+</body>
+</html>
