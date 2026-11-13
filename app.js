@@ -1,6 +1,7 @@
 /* Seguimiento de práctica clínica · app local (sin servidor). Los datos viven solo en este dispositivo (localStorage). */
 'use strict';
 const LS_KEY = 'seguimientoPC_v1';
+const APP_VER = '1.1';
 const PRACTICAS = [
   { id: 'FUN', nombre: 'Fundamentos de Enfermería I', corto: 'Fundamentos', re: /fundamento/ },
   { id: 'MQ',  nombre: 'Enfermería Médico Quirúrgica', corto: 'Médico Quirúrgica', re: /medico\s*-?\s*quir/ },
@@ -394,7 +395,7 @@ function closeModal() { $('#modalBg').classList.remove('on'); $('#modal').innerH
 const XF = { name: 'Noto Sans', sz: 10 };
 const LB = { style: 'thin', color: { rgb: 'D5D9C8' } };
 const BORDER = { top: LB, bottom: LB, left: LB, right: LB };
-function hojaEstilada(titulo, sub, head, data, widths) {
+function hojaEstilada(titulo, sub, head, data, widths, mergeCols) {
   const ws = XLSX.utils.aoa_to_sheet([[titulo], [sub], [], head, ...data]);
   const rg = XLSX.utils.decode_range(ws['!ref']);
   for (let r = rg.s.r; r <= rg.e.r; r++) for (let c = rg.s.c; c <= rg.e.c; c++) {
@@ -407,7 +408,25 @@ function hojaEstilada(titulo, sub, head, data, widths) {
     ws[a].s = s;
   }
   ws['!cols'] = widths.map(w => ({ wch: w }));
-  ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: Math.max(0, head.length - 1) } }, { s: { r: 1, c: 0 }, e: { r: 1, c: Math.max(0, head.length - 1) } }];
+  const merges = [{ s: { r: 0, c: 0 }, e: { r: 0, c: Math.max(0, head.length - 1) } }, { s: { r: 1, c: 0 }, e: { r: 1, c: Math.max(0, head.length - 1) } }];
+  (mergeCols || []).forEach(c => {
+    let i = 0;
+    while (i < data.length) {
+      const v = data[i][c];
+      if (v === '' || v == null) { i++; continue; }
+      let j = i + 1;
+      while (j < data.length && data[j][c] === v) j++;
+      if (j - i > 1) {
+        merges.push({ s: { r: 4 + i, c }, e: { r: 3 + j, c } });
+        for (let k = i + 1; k < j; k++) {
+          const a = XLSX.utils.encode_cell({ r: 4 + k, c });
+          if (ws[a]) ws[a].v = '';
+        }
+      }
+      i = j;
+    }
+  });
+  ws['!merges'] = merges;
   if (data.length) ws['!autofilter'] = { ref: XLSX.utils.encode_range({ r: 3, c: 0 }, { r: 3 + data.length, c: head.length - 1 }) };
   return ws;
 }
@@ -452,6 +471,359 @@ function agrupar(rows, fk) {
   const m = new Map();
   for (const r of rows) { const k = fk(r) || 'Sin dato'; const g = m.get(k) || { k, n: 0, alerta: 0, adv: 0, conCal: 0, suma: 0, riesgo: 0, faltas: 0, pct: 0 }; g.n++; g.pct += r.pct; if (r.estado === 'alerta') g.alerta++; if (r.estado === 'advertencia') g.adv++; if (r.final != null) { g.conCal++; g.suma += r.final; } if (r.riesgo) g.riesgo++; g.faltas += r.nf; m.set(k, g); }
   return [...m.values()].map(g => ({ ...g, prom: g.conCal ? g.suma / g.conCal : null, pctProm: g.pct / g.n })).sort((a, b) => a.k.localeCompare(b.k, 'es', { numeric: true }));
+}
+
+
+/* ---------- estadísticas ---------- */
+function anioDeGrupo(g) {
+  const m = String(g || '').trim().match(/^(\d+)/);
+  if (!m) return 'Sin año';
+  const n = m[1];
+  return n + (n === '1' || n === '3' ? '/er. año' : '/o. año');
+}
+function turnoDe(r) {
+  if (r.turno) return r.turno;
+  const t = norm([r.horario, r.hoja, r.periodo].filter(Boolean).join(' '));
+  if (/vespert|segundo\s*turno|14:?00/.test(t)) return 'Vespertino';
+  if (/matut|primer\s*turno|07:?30/.test(t)) return 'Matutino';
+  return 'Sin turno';
+}
+function enRango(iso, F) {
+  if (!iso) return !F.desde && !F.hasta;
+  if (F.desde && iso < F.desde) return false;
+  if (F.hasta && iso > F.hasta) return false;
+  return true;
+}
+function lunesDe(iso) {
+  const d = new Date(iso + 'T12:00:00');
+  d.setDate(d.getDate() - (d.getDay() + 6) % 7);
+  return d.toISOString().slice(0, 10);
+}
+function mesDe(iso) { return String(iso || '').slice(0, 7); }
+function etiquetaMes(ym) {
+  if (!ym) return '—';
+  const [y, m] = ym.split('-');
+  const M = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+  return `${M[+m - 1]} ${y}`;
+}
+
+let ST_F = { desde: '', hasta: '', anio: '', grupo: '', sede: '', practica: '' };
+let ST_TABLAS = {};
+let ST_LAST = null;
+
+function statsDe(F) {
+  F = F || ST_F;
+  const d = derive();
+  const rows = d.rows.filter(r => {
+    if (F.practica && r.practica !== F.practica) return false;
+    if (F.sede && r.sede !== F.sede) return false;
+    if (F.grupo && (r.grupo || '') !== F.grupo) return false;
+    if (F.anio && anioDeGrupo(r.grupo) !== F.anio) return false;
+    return true;
+  }).map(r => {
+    const faltasPeriodo = r.faltas.filter(f => enRango(f.fecha, F));
+    return { ...r, faltasPeriodo, nfPeriodo: faltasPeriodo.length, anio: anioDeGrupo(r.grupo), turnoN: turnoDe(r) };
+  });
+  const setCad = new Set(rows.map(r => r.cadete));
+  const faltas = rows.flatMap(r => r.faltasPeriodo);
+  const acciones = Object.values(S.acciones).filter(a => setCad.has(a.cadete) && enRango(a.fecha, F));
+  const cads = [...setCad];
+  const peor = k => rows.filter(r => r.cadete === k).reduce((m, r) => Math.max(m, ORD[r.estado]), 0);
+  const nAl = cads.filter(k => peor(k) === 3).length;
+  const nAd = cads.filter(k => peor(k) === 2).length;
+  const nReg = cads.filter(k => peor(k) <= 1).length;
+  const conCal = rows.filter(r => r.final != null);
+  const prom = conCal.length ? conCal.reduce((s, r) => s + r.final, 0) / conCal.length : null;
+  const nRies = new Set(rows.filter(r => r.riesgo).map(r => r.cadete)).size;
+  const nRiesReg = rows.filter(r => r.riesgo).length;
+  const pctProm = rows.length ? rows.reduce((s, r) => s + r.pct, 0) / rows.length : null;
+  const hayFecha = !!(F.desde || F.hasta);
+
+  const bloque = (fk, labelOf) => agrupar(rows, fk).map(g => {
+    const rs = rows.filter(r => (fk(r) || 'Sin dato') === g.k);
+    const fl = rs.reduce((s, r) => s + r.nfPeriodo, 0);
+    return { k: g.k, n: g.n, cadetes: new Set(rs.map(r => r.cadete)).size, alerta: g.alerta, adv: g.adv, regular: g.n - g.alerta - g.adv, conCal: g.conCal, prom: g.prom, riesgo: g.riesgo, faltas: g.faltas, faltasPeriodo: fl, pctProm: g.pctProm };
+  });
+
+  const porAnio = bloque(r => r.anio);
+  const porGrupo = bloque(r => r.grupo || 'Sin grupo');
+  const porSede = bloque(r => r.sede || 'Sin sede');
+  const porPractica = bloque(r => PMAP[r.practica].nombre);
+  const porTurno = bloque(r => r.turnoN);
+  const porDocente = bloque(r => r.docente || 'Sin docente');
+
+  const porMotivo = MOTIVOS.map(m => ({ k: m, n: faltas.filter(f => f.motivo === m).length, c: MCOLOR[m] }));
+  const otrosMot = {};
+  faltas.forEach(f => { if (!MOTIVOS.includes(f.motivo)) otrosMot[f.motivo || 'Sin motivo'] = (otrosMot[f.motivo || 'Sin motivo'] || 0) + 1; });
+  Object.entries(otrosMot).forEach(([k, n]) => porMotivo.push({ k, n, c: '#9aa08a' }));
+
+  const serieHuecos = (keys, step) => {
+    if (!keys.length) return [];
+    const pts = [];
+    if (step === 'semana') {
+      const last = new Date(keys[keys.length - 1] + 'T12:00:00');
+      for (let d = new Date(keys[0] + 'T12:00:00'); d <= last; d.setDate(d.getDate() + 7)) pts.push(d.toISOString().slice(0, 10));
+    } else {
+      const [y0, m0] = keys[0].split('-').map(Number);
+      const [y1, m1] = keys[keys.length - 1].split('-').map(Number);
+      for (let y = y0, m = m0; y < y1 || (y === y1 && m <= m1);) {
+        pts.push(`${y}-${String(m).padStart(2, '0')}`);
+        m++; if (m > 12) { m = 1; y++; }
+      }
+    }
+    return pts;
+  };
+  const contarPor = (arr, keyFn) => {
+    const m = new Map();
+    arr.forEach(x => { const k = keyFn(x); if (k) m.set(k, (m.get(k) || 0) + 1); });
+    return m;
+  };
+  const mapSem = contarPor(faltas, f => lunesDe(f.fecha));
+  const mapMes = contarPor(faltas, f => mesDe(f.fecha));
+  const porSemana = serieHuecos([...mapSem.keys()].sort(), 'semana').map(k => ({ k, v: mapSem.get(k) || 0, etiqueta: 'sem. ' + fFecha(k).replace(/ \d{4}$/, '') }));
+  const porMes = serieHuecos([...mapMes.keys()].sort(), 'mes').map(k => ({ k, v: mapMes.get(k) || 0, etiqueta: etiquetaMes(k) }));
+
+  const rankingFaltas = rows.slice().sort((a, b) => b.nfPeriodo - a.nfPeriodo || b.pct - a.pct || a.nombre.localeCompare(b.nombre, 'es')).map(r => r);
+  const rankingCerca30 = rows.slice().sort((a, b) => b.pct - a.pct || b.nf - a.nf || a.nombre.localeCompare(b.nombre, 'es')).map(r => r);
+
+  const accTipo = new Map(), accEst = new Map(), accResp = new Map();
+  acciones.forEach(a => {
+    const t = a.accion || 'Sin acción'; accTipo.set(t, (accTipo.get(t) || 0) + 1);
+    const e = a.estado || 'Sin estado'; accEst.set(e, (accEst.get(e) || 0) + 1);
+    const p = a.responsable || 'Sin responsable'; accResp.set(p, (accResp.get(p) || 0) + 1);
+  });
+  const porAccion = [...accTipo.entries()].map(([k, n]) => ({ k, n })).sort((a, b) => b.n - a.n || a.k.localeCompare(b.k, 'es'));
+  const porEstadoAcc = [...accEst.entries()].map(([k, n]) => ({ k, n })).sort((a, b) => b.n - a.n);
+  const porResponsable = [...accResp.entries()].map(([k, n]) => ({ k, n })).sort((a, b) => b.n - a.n || a.k.localeCompare(b.k, 'es'));
+
+  const bins = [['< 6', 0, 6], ['6 a 6.9', 6, 7], ['7 a 7.9', 7, 8], ['8 a 8.9', 8, 9], ['9 a 10', 9, 10.01]];
+  const porCalif = bins.map(([k, a, b]) => ({ k, n: conCal.filter(r => r.final >= a && r.final < b).length }));
+
+  const kpis = {
+    cadetes: cads.length, registros: rows.length, faltas: faltas.length, faltasTotales: rows.reduce((s, r) => s + r.nf, 0),
+    pctProm, alerta: nAl, advertencia: nAd, regular: nReg,
+    conCal: conCal.length, sinCal: rows.length - conCal.length, promedio: prom,
+    riesgoCad: nRies, riesgoReg: nRiesReg, acciones: acciones.length,
+    accPend: acciones.filter(a => a.estado === 'Pendiente').length,
+    accCurso: acciones.filter(a => a.estado === 'En curso').length,
+    accCerrada: acciones.filter(a => a.estado === 'Cerrada').length,
+    hayFecha, imports: (S.imports || []).length, padron: Object.keys(S.padron || {}).length
+  };
+
+  return { rows, faltas, acciones, kpis, porAnio, porGrupo, porSede, porPractica, porTurno, porDocente, porMotivo, porSemana, porMes, rankingFaltas, rankingCerca30, porAccion, porEstadoAcc, porResponsable, porCalif, hayFecha };
+}
+
+function lineaSerie(pts, { id = 'lg', vacio = 'Sin faltas en el periodo.' } = {}) {
+  if (!pts.length) return `<div class="muted small">${vacio}</div>`;
+  const W = 600, H = 150, P = 30, mx = Math.max(...pts.map(p => p.v), 1);
+  const x = i => P + (pts.length === 1 ? (W - 2 * P) / 2 : i * (W - 2 * P) / (pts.length - 1)), y = v => H - 24 - v / mx * (H - 46);
+  const path = pts.map((p, i) => `${i ? 'L' : 'M'}${x(i)},${y(p.v)}`).join(' ');
+  const show = i => pts.length <= 12 || i === 0 || i === pts.length - 1 || i % Math.ceil(pts.length / 8) === 0;
+  return `<svg class="line-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet"><defs><linearGradient id="${esc(id)}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#6b7a3a" stop-opacity=".35"/><stop offset="1" stop-color="#6b7a3a" stop-opacity="0"/></linearGradient></defs>
+  <path d="${path} L${x(pts.length - 1)},${H - 24} L${x(0)},${H - 24} Z" fill="url(#${esc(id)})"/><path d="${path}" fill="none" stroke="#4b5320" stroke-width="2.5" stroke-linejoin="round"/>
+  ${pts.map((p, i) => `<circle cx="${x(i)}" cy="${y(p.v)}" r="4" fill="#c9a227"><title>${esc(p.etiqueta || p.k)}: ${p.v}</title></circle><text x="${x(i)}" y="${y(p.v) - 9}" font-size="11" text-anchor="middle" fill="#1f2418" font-weight="700">${p.v}</text>${show(i) ? `<text x="${x(i)}" y="${H - 6}" font-size="10" text-anchor="middle" fill="#6b7160">${esc(p.etiqueta || p.k)}</text>` : ''}`).join('')}</svg>`;
+}
+
+function tablaEst(head, data, { num = [], href = null, id = '' } = {}) {
+  if (!data.length) return '<div class="muted small">Sin datos con estos filtros.</div>';
+  const th = head.map((h, i) => `<th class="nos${num.includes(i) ? ' num' : ''}">${esc(h)}</th>`).join('');
+  const body = data.map((row, ri) => {
+    const cells = row.map((v, i) => `<td class="${num.includes(i) ? 'num' : ''}">${v}</td>`).join('');
+    const link = href ? href(ri) : null;
+    return link ? `<tr class="clk" data-href="${link}">${cells}</tr>` : `<tr>${cells}</tr>`;
+  }).join('');
+  return `<div class="tbl-wrap"><table class="tbl st-tbl" ${id ? `id="${id}"` : ''} style="min-width:0"><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+function btnCsv(id) { return `<button class="btn ghost sm hide-print" data-csv="${id}">CSV</button>`; }
+function filaAg(g, hayFecha) {
+  return [g.k, g.cadetes, g.n, hayFecha ? g.faltasPeriodo : g.faltas, n2(g.pctProm), g.alerta, g.adv, g.regular, g.conCal, n2(g.prom), g.riesgo];
+}
+const HEAD_AG = ['', 'Cadetes', 'Registros', 'Faltas', '% faltas prom.', 'Alerta', 'Advertencia', 'Regular', 'Con calif.', 'Promedio', 'Riesgo acad.'];
+const NUM_AG = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+const W_AG = [28, 10, 10, 9, 14, 9, 12, 9, 11, 10, 12];
+
+function filtrosTxt(F) {
+  const p = [];
+  if (F.desde || F.hasta) p.push('Fechas: ' + (F.desde ? fFecha(F.desde) : 'inicio') + ' — ' + (F.hasta ? fFecha(F.hasta) : 'hoy'));
+  if (F.anio) p.push('Año: ' + F.anio);
+  if (F.grupo) p.push('Grupo: ' + F.grupo);
+  if (F.sede) p.push('Sede: ' + F.sede);
+  if (F.practica) p.push('Práctica: ' + (PMAP[F.practica]?.nombre || F.practica));
+  return p.length ? p.join(' · ') : 'Sin filtros (todos los registros)';
+}
+
+function vEstadisticas() {
+  const d = derive();
+  if (!d.rows.length) return bienvenida();
+  const anios = [...new Set(d.rows.map(r => anioDeGrupo(r.grupo)))].sort((a, b) => a.localeCompare(b, 'es', { numeric: true }));
+  const sel = (id, lab, html) => `<div class="field"><label>${lab}</label><select class="inp" id="${id}">${html}</select></div>`;
+  return `<div class="print-only" style="margin-bottom:12px"><div style="font-weight:800">Estadísticas de práctica clínica · Esc. Mil. Enfría.</div><div class="muted">Subsec. Práctica Clínica · Ciclo lectivo 2026-2027 · v${APP_VER} · generado el ${fFecha(hoyISO())}</div><div class="muted">${esc(filtrosTxt(ST_F))}</div></div>
+  <div class="filters st-filters" id="stF">
+    <div class="field"><label>Desde</label><input class="inp" type="date" id="stDesde" value="${esc(ST_F.desde)}"></div>
+    <div class="field"><label>Hasta</label><input class="inp" type="date" id="stHasta" value="${esc(ST_F.hasta)}"></div>
+    ${sel('stAnio', 'Año', `<option value="">Todos</option>` + anios.map(a => `<option value="${esc(a)}" ${ST_F.anio === a ? 'selected' : ''}>${esc(a)}</option>`).join(''))}
+    ${sel('stGr', 'Grupo', opciones(d.rows.map(r => r.grupo), ST_F.grupo, 'Todos'))}
+    ${sel('stSe', 'Sede', opciones(d.rows.map(r => r.sede), ST_F.sede, 'Todas'))}
+    ${sel('stPr', 'Práctica', `<option value="">Todas</option>${PRACTICAS.map(p => `<option value="${p.id}" ${ST_F.practica === p.id ? 'selected' : ''}>${p.corto}</option>`).join('')}`)}
+  </div>
+  <div class="count-line"><span class="muted" id="stFiltroTxt"></span><span class="row hide-print">
+    <button class="btn ghost sm" id="stClear">Quitar filtros</button>
+    <button class="btn sm" data-act="export-stats">Excel de estadísticas</button>
+    <button class="btn gold sm" data-act="print-stats">Imprimir / PDF</button>
+  </span></div>
+  <p class="small muted st-nota">El % de faltas y el umbral de alerta (${S.cfg.alerta} %) usan el acumulado oficial (todas las faltas de la práctica). Si filtras por fechas, las tendencias, los motivos y el ranking de más faltas cuentan solo las del periodo.</p>
+  <div id="stBody"></div>`;
+}
+
+function pintarEstadisticas() {
+  const body = $('#stBody'); if (!body) return;
+  const st = statsDe(ST_F); ST_LAST = st;
+  const k = st.kpis, hay = st.hayFecha;
+  if ($('#stFiltroTxt')) $('#stFiltroTxt').textContent = filtrosTxt(ST_F) + (hay ? ` · ${k.faltas} falta${k.faltas === 1 ? '' : 's'} en el periodo` : '');
+  const headAg = HEAD_AG.map((h, i) => i === 3 && hay ? 'Faltas en el periodo' : h);
+  const mkAg = (id, titulo, arr, primera) => {
+    const head = [primera, ...headAg.slice(1)];
+    const data = arr.map(g => filaAg(g, hay));
+    ST_TABLAS[id] = { titulo, head, data, widths: W_AG, merge: [0] };
+    const htmlData = data.map(row => row.map((v, i) => (i === 4 || i === 9) ? (v === '' || v == null ? '—' : fmt(v, i === 9 ? 2 : 1) + (i === 4 ? ' %' : '')) : (i === 0 ? esc(v ?? '') : v)));
+    return `<div class="card"><h3>${esc(titulo)} ${btnCsv(id)}</h3>${tablaEst(head, htmlData, { num: NUM_AG })}</div>`;
+  };
+  ST_TABLAS = {};
+  const kpis = `<div class="grid kpis">
+    ${kpi('Cadetes', k.cadetes, `${k.registros} registros de práctica`, '', '#/listado')}
+    ${kpi('En alerta', k.alerta, `desde ${S.cfg.alerta} % de faltas`, 'bad', '#/listado?estado=alerta')}
+    ${kpi('En advertencia', k.advertencia, `desde ${S.cfg.adv} %`, 'warn', '#/listado?estado=advertencia')}
+    ${kpi('Faltas' + (hay ? ' del periodo' : ''), k.faltas, hay ? `${k.faltasTotales} en el acumulado` : 'los retardos no cuentan', 'gold')}
+    ${kpi('% faltas promedio', k.pctProm, 'acumulado oficial por registro', '', null, 1)}
+    ${kpi('Promedio general', k.promedio, `${k.conCal} con calificación · ${k.sinCal} sin ella`, 'ok', null, 2)}
+    ${kpi('Riesgo académico', k.riesgoCad, `calificación menor a ${S.cfg.umbral}`, k.riesgoCad ? 'bad' : 'ok', '#/listado?estado=riesgo')}
+    ${kpi('Acciones', k.acciones, `${k.accPend} pendiente · ${k.accCurso} en curso · ${k.accCerrada} cerrada`, '')}
+  </div>`;
+
+  const motItems = st.porMotivo.map(m => ({ l: m.k, v: m.n, c: m.c }));
+  ST_TABLAS.porMotivo = { titulo: 'Faltas por motivo', head: ['Motivo', 'Faltas', '%'], data: st.porMotivo.filter(m => m.n).map(m => [m.k, m.n, k.faltas ? Math.round(m.n * 1000 / k.faltas) / 10 : 0]), widths: [28, 10, 8], merge: [] };
+
+  const rankF = st.rankingFaltas;
+  const headRF = hay ? ['Cadete', 'Grupo', 'Año', 'Práctica', 'Sede', 'Faltas del periodo', 'Faltas acum.', '% faltas', 'Estado', 'Faltas para alerta'] : ['Cadete', 'Grupo', 'Año', 'Práctica', 'Sede', 'Faltas', '% faltas', 'Estado', 'Faltas para alerta'];
+  const dataRF = rankF.map(r => hay
+    ? [r.nombre, r.grupo || '', r.anio, PMAP[r.practica].corto, r.sede, r.nfPeriodo, r.nf, n2(r.pct), ESTN[r.estado], r.estado === 'alerta' ? 0 : r.paraAlerta]
+    : [r.nombre, r.grupo || '', r.anio, PMAP[r.practica].corto, r.sede, r.nf, n2(r.pct), ESTN[r.estado], r.estado === 'alerta' ? 0 : r.paraAlerta]);
+  ST_TABLAS.rankingFaltas = { titulo: 'Cadetes con más faltas', head: headRF, data: dataRF, widths: [30, 10, 12, 18, 22, 12, 12, 10, 12, 14], merge: [0, 1, 2] };
+  const badgeEst = v => `<span class="badge b-${v === 'Alerta' ? 'alerta' : v === 'Advertencia' ? 'advertencia' : 'regular'}">${esc(v)}</span>`;
+  const htmlRF = dataRF.map(row => {
+    const pctI = hay ? 7 : 6, estI = hay ? 8 : 7;
+    return row.map((v, i) => i === pctI ? fmt(v, 2) + ' %' : i === estI ? badgeEst(v) : esc(v ?? ''));
+  });
+
+  const dataC30 = st.rankingCerca30.map(r => {
+    const dist = Math.round((S.cfg.alerta - r.pct) * 100) / 100;
+    const distTxt = r.estado === 'alerta' ? `En alerta (+${fmt(Math.abs(dist), 2)} pp)` : `${fmt(dist, 2)} pp · ${r.paraAlerta} falta${r.paraAlerta === 1 ? '' : 's'}`;
+    return [r.nombre, r.grupo || '', r.anio, PMAP[r.practica].corto, r.sede, r.nf, n2(r.pct), ESTN[r.estado], distTxt, r.estado === 'alerta' ? 0 : r.paraAlerta];
+  });
+  ST_TABLAS.rankingCerca30 = { titulo: 'Más cerca del umbral de alerta (' + S.cfg.alerta + ' %)', head: ['Cadete', 'Grupo', 'Año', 'Práctica', 'Sede', 'Faltas', '% faltas', 'Estado', 'Distancia al umbral', 'Faltas para alerta'], data: dataC30, widths: [30, 10, 12, 18, 22, 8, 10, 12, 24, 14], merge: [0, 1, 2] };
+  const htmlC30 = dataC30.map(row => row.map((v, i) => i === 6 ? fmt(v, 2) + ' %' : i === 7 ? badgeEst(v) : esc(v ?? '')));
+
+  ST_TABLAS.porAccion = { titulo: 'Acciones por tipo', head: ['Acción', 'Registros'], data: st.porAccion.map(a => [a.k, a.n]), widths: [44, 10], merge: [] };
+  ST_TABLAS.porEstadoAcc = { titulo: 'Acciones por estado', head: ['Estado', 'Registros'], data: st.porEstadoAcc.map(a => [a.k, a.n]), widths: [22, 10], merge: [] };
+  ST_TABLAS.porResponsable = { titulo: 'Acciones por responsable', head: ['Responsable', 'Registros'], data: st.porResponsable.map(a => [a.k, a.n]), widths: [30, 10], merge: [] };
+  ST_TABLAS.porCalif = { titulo: 'Distribución de calificaciones', head: ['Rango', 'Registros'], data: st.porCalif.map(a => [a.k, a.n]), widths: [16, 10], merge: [] };
+  ST_TABLAS.porSemana = { titulo: 'Faltas por semana', head: ['Semana (lunes)', 'Faltas'], data: st.porSemana.map(p => [p.k, p.v]), widths: [16, 10], merge: [] };
+  ST_TABLAS.porMes = { titulo: 'Faltas por mes', head: ['Mes', 'Faltas'], data: st.porMes.map(p => [p.k, p.v]), widths: [12, 10], merge: [] };
+
+  const hrefR = src => i => src[i] ? `#/cadete/${encodeURIComponent(src[i].cadete)}` : null;
+
+  body.innerHTML = `${kpis}
+  <div class="grid cols2" style="margin-top:16px">
+    <div class="card"><h3>Faltas por motivo ${btnCsv('porMotivo')}</h3>${donut(motItems)}</div>
+    <div class="card"><h3>Distribución de calificaciones ${btnCsv('porCalif')}</h3>${k.conCal ? vbars(st.porCalif.map((a, i) => ({ l: a.k, v: a.n, c: ['#b23a2e', '#d0662a', '#c9a227', '#6b7a3a', '#3f7d4e'][i] }))) : '<div class="muted small">Aún no hay calificaciones finales.</div>'}</div>
+    <div class="card span2"><h3>Faltas por semana ${btnCsv('porSemana')}</h3>${lineaSerie(st.porSemana, { id: 'lg-sem' })}</div>
+    <div class="card span2"><h3>Faltas por mes ${btnCsv('porMes')}</h3>${lineaSerie(st.porMes, { id: 'lg-mes' })}</div>
+  </div>
+  <h2 class="st-sec">Desgloses y comparativos</h2>
+  <div class="grid cols1 st-bloques">
+    ${mkAg('porAnio', 'Por año', st.porAnio, 'Año')}
+    ${mkAg('porGrupo', 'Por grupo (comparativo)', st.porGrupo, 'Grupo')}
+    ${mkAg('porSede', 'Por sede (comparativo)', st.porSede, 'Sede')}
+    ${mkAg('porPractica', 'Por práctica', st.porPractica, 'Práctica')}
+    ${mkAg('porTurno', 'Por turno', st.porTurno, 'Turno')}
+    ${mkAg('porDocente', 'Por docente / instructora', st.porDocente, 'Docente')}
+  </div>
+  <h2 class="st-sec">Rankings</h2>
+  <div class="card"><h3>Cadetes con más faltas <span class="sub">de más a menos</span> ${btnCsv('rankingFaltas')}</h3>${tablaEst(headRF, htmlRF, { num: hay ? [5, 6, 7, 9] : [5, 6, 8], href: hrefR(rankF) })}</div>
+  <div class="card" style="margin-top:16px"><h3>Más cerca del umbral de alerta (${S.cfg.alerta} %) <span class="sub">acumulado oficial, de mayor a menor %</span> ${btnCsv('rankingCerca30')}</h3>${tablaEst(ST_TABLAS.rankingCerca30.head, htmlC30, { num: [5, 6, 9], href: hrefR(st.rankingCerca30) })}</div>
+  <h2 class="st-sec">Acciones de seguimiento</h2>
+  <div class="grid cols3">
+    <div class="card"><h3>Por tipo ${btnCsv('porAccion')}</h3>${st.porAccion.length ? hbars(st.porAccion.map(a => ({ l: a.k, v: a.n }))) : '<div class="muted small">Sin acciones con estos filtros.</div>'}</div>
+    <div class="card"><h3>Por estado ${btnCsv('porEstadoAcc')}</h3>${st.porEstadoAcc.length ? donut(st.porEstadoAcc.map(a => ({ l: a.k, v: a.n, c: a.k === 'Pendiente' ? '#c98a12' : a.k === 'En curso' ? '#2f6c8f' : '#3f7d4e' }))) : '<div class="muted small">Sin acciones.</div>'}</div>
+    <div class="card"><h3>Por responsable ${btnCsv('porResponsable')}</h3>${st.porResponsable.length ? hbars(st.porResponsable.slice(0, 12).map(a => ({ l: a.k, v: a.n }))) : '<div class="muted small">Sin acciones.</div>'}</div>
+  </div>`;
+  animar(body);
+}
+
+function bindEstadisticas() {
+  if (!$('#stF')) return;
+  const upd = () => {
+    ST_F.desde = $('#stDesde').value;
+    ST_F.hasta = $('#stHasta').value;
+    ST_F.anio = $('#stAnio').value;
+    ST_F.grupo = $('#stGr').value;
+    ST_F.sede = $('#stSe').value;
+    ST_F.practica = $('#stPr').value;
+    pintarEstadisticas();
+  };
+  ['#stDesde', '#stHasta', '#stAnio', '#stGr', '#stSe', '#stPr'].forEach(s => $(s).addEventListener('change', upd));
+  $('#stClear').onclick = () => { ST_F = { desde: '', hasta: '', anio: '', grupo: '', sede: '', practica: '' }; render(true); };
+  pintarEstadisticas();
+}
+
+function exportarCSV(id) {
+  const t = ST_TABLAS[id]; if (!t) return toast('No hay tabla para exportar.', true);
+  const line = row => row.map(v => {
+    const s = v == null ? '' : String(v);
+    return /[",;\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }).join(',');
+  const csv = '\uFEFF' + [line(t.head), ...t.data.map(line)].join('\r\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = `${t.titulo.replace(/[^\wÁÉÍÓÚáéíóúñÑ %.-]+/g, '_')}_${hoyISO()}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  toast('CSV generado');
+}
+
+function exportarEstadisticas() {
+  if (!window.XLSX) return toast('No se cargó el módulo de Excel.', true);
+  if (!ST_LAST) statsDe(ST_F);
+  pintarEstadisticas();
+  if (!ST_LAST || !ST_LAST.rows.length) return toast('No hay datos con estos filtros.', true);
+  const sub = `Generado el ${fFecha(hoyISO())} · ${filtrosTxt(ST_F)} · % oficial = faltas × ${S.cfg.horasFalta} h × 100 / horas de la práctica · alerta desde ${S.cfg.alerta} % · advertencia desde ${S.cfg.adv} % · riesgo académico: menor a ${S.cfg.umbral} · letra Noto Sans 10`;
+  const wb = XLSX.utils.book_new();
+  const k = ST_LAST.kpis;
+  const tot = [
+    ['Cadetes', k.cadetes], ['Registros de práctica', k.registros],
+    ['Faltas del filtro', k.faltas], ['Faltas acumuladas (oficiales)', k.faltasTotales],
+    ['% de faltas promedio', n2(k.pctProm)],
+    ['Cadetes en alerta', k.alerta], ['Cadetes en advertencia', k.advertencia], ['Cadetes en regular', k.regular],
+    ['Registros con calificación', k.conCal], ['Registros sin calificación', k.sinCal],
+    ['Promedio general', n2(k.promedio)], ['Cadetes en riesgo académico', k.riesgoCad],
+    ['Acciones', k.acciones], ['Acciones pendientes', k.accPend], ['En curso', k.accCurso], ['Cerradas', k.accCerrada]
+  ];
+  XLSX.utils.book_append_sheet(wb, hojaEstilada('Totales', sub, ['Indicador', 'Valor'], tot, [36, 14]), 'Totales');
+  const orden = ['porAnio', 'porGrupo', 'porSede', 'porPractica', 'porTurno', 'porDocente', 'porMotivo', 'porSemana', 'porMes', 'rankingFaltas', 'rankingCerca30', 'porAccion', 'porEstadoAcc', 'porResponsable', 'porCalif'];
+  const hojas = { porAnio: 'Por año', porGrupo: 'Por grupo', porSede: 'Por sede', porPractica: 'Por práctica', porTurno: 'Por turno', porDocente: 'Por docente', porMotivo: 'Por motivo', porSemana: 'Por semana', porMes: 'Por mes', rankingFaltas: 'Más faltas', rankingCerca30: 'Cerca del 30 %', porAccion: 'Acciones tipo', porEstadoAcc: 'Acciones estado', porResponsable: 'Responsables', porCalif: 'Calificaciones' };
+  orden.forEach(id => {
+    const t = ST_TABLAS[id]; if (!t) return;
+    const name = hojas[id].slice(0, 31);
+    XLSX.utils.book_append_sheet(wb, hojaEstilada(t.titulo, sub, t.head, t.data, t.widths || t.head.map(() => 14), t.merge), name);
+  });
+  XLSX.writeFile(wb, `Estadisticas_practica_clinica_${hoyISO()}.xlsx`);
+  toast('Excel de estadísticas generado');
+}
+
+function imprimirEstadisticas() {
+  if (!$('#stBody')) { location.hash = '#/estadisticas'; setTimeout(imprimirEstadisticas, 200); return; }
+  document.title = 'Estadísticas de práctica clínica · Esc. Mil. Enfría. · v' + APP_VER;
+  window.print();
 }
 
 /* ---------- gráficas ---------- */
@@ -535,7 +907,7 @@ function vTablero() {
     <div class="card"><h3>% de faltas por sede <span class="sub">promedio</span></h3>${hbars(agrupar(rows, r => r.sede).map(g => ({ l: g.k, v: g.pctProm, c: g.pctProm >= S.cfg.adv ? 'linear-gradient(90deg,#e0b45a,#c98a12)' : null })).sort((a, b) => b.v - a.v).slice(0, 10), { max: Math.max(S.cfg.alerta, 1), fmtV: v => fmt(v) + ' %' })}</div>
     <div class="card"><h3>Alerta y advertencia <a class="btn ghost sm" href="#/listado?estado=riesgoFaltas">Ver todos</a></h3><div class="list-mini">${top.length ? top.map(r => miniRow(r, `${fmt(r.pct, 2)} %`)).join('') : '<div class="muted small">Nadie en advertencia ni en alerta.</div>'}</div></div>
     <div class="card"><h3>Riesgo académico <a class="btn ghost sm" href="#/listado?estado=riesgo">Ver todos</a></h3><div class="list-mini">${ries.length ? ries.map(r => miniRow(r, fmt2(r.final), 'riesgo')).join('') : `<div class="muted small">${conCal.length ? `Nadie con calificación menor a ${S.cfg.umbral}.` : 'Sin calificaciones todavía.'}</div>`}</div></div>
-    <div class="card"><h3>Exportar</h3><p class="muted small">Reportes en Excel con letra Noto Sans 10.</p><div class="row"><button class="btn" data-act="export-seg">Reporte de seguimiento</button><button class="btn gold" data-act="export-riesgo">Reporte de riesgo</button></div></div>
+    <div class="card"><h3>Exportar y estadísticas</h3><p class="muted small">Reportes en Excel con letra Noto Sans 10. Las estadísticas cubren faltas, calificaciones, acciones y comparativos.</p><div class="row"><button class="btn" data-act="export-seg">Reporte de seguimiento</button><button class="btn gold" data-act="export-riesgo">Reporte de riesgo</button><a class="btn ghost" href="#/estadisticas">Ver estadísticas</a></div></div>
   </div>`;
 }
 function kpi(l, v, s, cls, href, dec = 0) {
@@ -761,7 +1133,7 @@ function vAjustes() {
     <div class="mfoot"><button class="btn ghost" id="sDef">Valores originales</button><button class="btn" id="sOk">Guardar reglas</button></div>
     <p class="small muted">Motivos de falta: ${MOTIVOS.join(', ')}. Cita programada incluye consulta, pelotón de sanidad y estudios de laboratorio; Servicio incluye cuartelera y guardia; Juzgado incluye audiencia y a declarar. Los retardos no cuentan como falta.</p></div>
   <div class="grid" style="align-content:start">
-    <div class="card"><h3>Reportes en Excel</h3><p class="small muted">Letra Noto Sans 10. El de seguimiento trae a todos los cadetes; el de riesgo, solo advertencia, alerta y calificación menor a ${c.umbral}.</p><div class="row"><button class="btn" data-act="export-seg">Reporte de seguimiento</button><button class="btn gold" data-act="export-riesgo">Reporte de riesgo</button></div></div>
+    <div class="card"><h3>Reportes en Excel</h3><p class="small muted">Letra Noto Sans 10. El de seguimiento trae a todos los cadetes; el de riesgo, solo advertencia, alerta y calificación menor a ${c.umbral}. El de estadísticas desglosa toda la información registrada.</p><div class="row"><button class="btn" data-act="export-seg">Reporte de seguimiento</button><button class="btn gold" data-act="export-riesgo">Reporte de riesgo</button><a class="btn ghost" href="#/estadisticas">Estadísticas</a></div></div>
     <div class="card"><h3>Respaldo</h3><p class="small muted">Tus datos (${n} cadetes, ${Object.keys(S.faltas).length} faltas, ${Object.keys(S.acciones).length} acciones) viven solo en este navegador. Descarga un respaldo para guardarlo o pasarlo a otro equipo.</p>
       <div class="row"><button class="btn" id="bExp">Descargar respaldo (.json)</button><label class="btn ghost">Restaurar respaldo<input type="file" id="bImp" accept=".json,application/json" hidden></label></div></div>
     <div class="card" style="border:1px solid var(--bad-l)"><h3>Borrar datos</h3><p class="small muted">Quita de este dispositivo a todos los cadetes, calificaciones, faltas y acciones. No se puede deshacer: descarga antes un respaldo.</p><button class="btn danger" id="bDel">Borrar todos los datos</button></div>
@@ -784,14 +1156,15 @@ function bindAjustes() {
 }
 
 /* ---------- ruteo ---------- */
-const TIT = { tablero: ['Tablero', 'Faltas y calificaciones de práctica clínica'], listado: ['Cadetes', 'Busca, filtra y abre la ficha de cada cadete'], captura: ['Calificaciones', 'Captura y corrección por lista'], importar: ['Importar', 'Listas de práctica clínica, registro de faltas y listas de grupo'], ajustes: ['Ajustes y respaldo', 'Reglas, reportes y respaldo'], cadete: ['Ficha del cadete', 'Calificaciones, faltas y bitácora de seguimiento'] };
+const TIT = { tablero: ['Tablero', 'Faltas y calificaciones de práctica clínica'], estadisticas: ['Estadísticas', 'Totales, desgloses, tendencias y rankings de todo lo registrado'], listado: ['Cadetes', 'Busca, filtra y abre la ficha de cada cadete'], captura: ['Calificaciones', 'Captura y corrección por lista'], importar: ['Importar', 'Listas de práctica clínica, registro de faltas y listas de grupo'], ajustes: ['Ajustes y respaldo', 'Reglas, reportes y respaldo'], cadete: ['Ficha del cadete', 'Calificaciones, faltas y bitácora de seguimiento'] };
 function parseHash() { const h = location.hash.replace(/^#\/?/, ''); const [path, qs] = h.split('?'); const parts = path.split('/'); return { r: parts[0] || 'tablero', arg: parts.slice(1).join('/'), params: Object.fromEntries(new URLSearchParams(qs || '')) }; }
 function render(quieto) {
   const { r, arg, params } = parseHash(); const v = $('#view');
   const [t, s] = TIT[r] || TIT.tablero; $('#viewTitle').textContent = t; $('#viewSub').textContent = s;
   $$('.nav a, .bottomnav a').forEach(a => a.classList.toggle('on', a.dataset.r === r || (r === 'cadete' && a.dataset.r === 'listado')));
   if (!quieto) { v.style.animation = 'none'; void v.offsetHeight; v.style.animation = ''; }
-  if (r === 'listado') { v.innerHTML = vListado(params); if ($('#lBody')) bindListado(); }
+  if (r === 'estadisticas') { v.innerHTML = vEstadisticas(); if ($('#stF')) bindEstadisticas(); }
+  else if (r === 'listado') { v.innerHTML = vListado(params); if ($('#lBody')) bindListado(); }
   else if (r === 'cadete') { const k = decodeURIComponent(arg); v.innerHTML = vCadete(k); if (S.cadetes[k]) bindCadete(k); }
   else if (r === 'captura') { v.innerHTML = vCaptura(); bindCaptura(); }
   else if (r === 'importar') { v.innerHTML = vImportar(); bindImportar(); }
@@ -801,7 +1174,7 @@ function render(quieto) {
 }
 window.addEventListener('hashchange', () => { render(); window.scrollTo({ top: 0 }); });
 document.addEventListener('click', e => {
-  const b = e.target.closest('[data-act]'); if (b) { if (b.dataset.act === 'export-seg') exportar('seguimiento'); else if (b.dataset.act === 'export-riesgo') exportar('riesgo'); return; }
+  const b = e.target.closest('[data-act]'); if (b) { if (b.dataset.act === 'export-seg') exportar('seguimiento'); else if (b.dataset.act === 'export-riesgo') exportar('riesgo'); else if (b.dataset.act === 'export-stats') exportarEstadisticas(); else if (b.dataset.act === 'print-stats') imprimirEstadisticas(); else if (b.dataset.csv) exportarCSV(b.dataset.csv); return; }
   const k = e.target.closest('[data-href]'); if (k) { location.hash = k.dataset.href; return; }
   if (e.target.closest('[data-close]')) closeModal();
 });
@@ -818,5 +1191,5 @@ qsI.addEventListener('input', () => {
 qr.addEventListener('click', () => { qr.classList.remove('on'); qsI.value = ''; });
 document.addEventListener('click', e => { if (!e.target.closest('.qsearch')) qr.classList.remove('on'); });
 /* para pruebas automatizadas */
-window.__app = { importarArchivos, libroReporte, derive: () => derive(), estado: () => S };
+window.__app = { importarArchivos, libroReporte, derive: () => derive(), estado: () => S, stats: F => statsDe(F || ST_F), anioDeGrupo, turnoDe, version: APP_VER };
 render();
